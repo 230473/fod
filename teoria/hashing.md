@@ -163,6 +163,41 @@ La cantidad esperada de cubetas con I registros es: `N × P(I)`
 
 **Conclusión**: aumentar la capacidad de la cubeta (C) reduce drásticamente el overflow, incluso con densidades altas.
 
+##### Ejemplo 1: DE = 100% (N=10.000, K=10.000, C=1)
+
+| i (registros) | P(i) | N × P(i) (nodos) | En saturación |
+|:---:|:---:|:---:|:---:|
+| 0 | 0.3679 | 3.679 | 0 |
+| 1 | 0.3679 | 3.679 | 0 |
+| 2 | 0.1839 | 1.839 | 1.839 |
+| 3 | 0.0613 | 613 | 1.226 |
+| 4 | 0.0153 | 153 | 459 |
+| **Total** | | | **3.524 registros en overflow (35.2%)** |
+
+##### Ejemplo 2: DE = 50% (K=10.000, N=20.000, C=1)
+
+| i | P(i) | N × P(i) | En saturación |
+|:---:|:---:|:---:|:---:|
+| 0 | 0.6065 | 12.130 | 0 |
+| 1 | 0.3032 | 6.065 | 0 |
+| 2 | 0.0758 | 1.516 | 1.516 |
+| 3 | 0.0126 | 252 | 504 |
+| 4 | 0.0016 | 32 | 96 |
+| **Total** | | | **2.116 registros en overflow (21.2%)** |
+
+##### Ejemplo 3: DE = 50% con C = 2 (K=10.000, N=10.000)
+
+| i | P(i) | N × P(i) | En saturación |
+|:---:|:---:|:---:|:---:|
+| 0 | 0.3678 | 3.678 | 0 |
+| 1 | 0.3678 | 3.678 | 0 |
+| 2 | 0.1839 | 1.839 | 0 |
+| 3 | 0.0613 | 613 | 613 |
+| 4 | 0.0153 | 153 | 306 |
+| **Total** | | | **919 registros en overflow (9.2%)** |
+
+> **Comparación**: al aumentar la capacidad de cubeta de 1 a 2 (manteniendo DE=50%), el overflow baja del 21.2% al 9.2%.
+
 ### 6. Tratamiento de overflow en hashing estático
 
 En **hashing estático**, el espacio de direccionamiento está **fijado previamente** (no crece). Al diseñar el archivo se define N (cantidad de cubetas) que se mantiene fijo.
@@ -243,6 +278,127 @@ Los registros de overflow **no usan** las cubetas normales. Se almacenan en un *
 
 **Ventaja**: mejora el tratamiento de inserciones y eliminaciones (no se desplazan registros).
 **Desventaja**: empeora el tiempo de acceso promedio (más desplazamientos de brazo).
+
+#### 6.5 Hash asistido por tabla
+
+Técnica de hashing estático que asegura acceder a un registro en **un solo acceso a disco** (garantizado), pero requiere una estructura adicional (tabla en memoria principal).
+
+**Tres funciones de hash**:
+1. **F1H(clave)**: retorna la dirección base (dirección del nodo donde debería residir).
+2. **F2H(clave)**: retorna un desplazamiento (se suma en caso de overflow).
+3. **F3H(clave)**: retorna una secuencia de bits (usada para comparar con la tabla).
+
+**Tabla en memoria**: tiene tantas entradas como direcciones de nodos disponibles. Cada entrada inicia con todos sus bits en 1.
+
+```
+Ejemplo: 10 claves, nodos de capacidad 2
+
+Clave     F1H   F2H   F3H
+Alfa      50    3     0001
+Beta      51    4     0011
+Gamma     52    7     0101
+Delta     50    3     0110
+Epsilon   52    3     1000
+Rho       51    5     0100
+Pi        50    2     0010
+Tau       53    2     1110
+Psi       50    9     1010
+Omega     50    4     0000
+```
+
+**Tabla inicial** (todas las entradas en 1111...):
+
+```
+Dir   Valor en tabla
+50    1111
+51    1111
+52    1111
+53    1111
+```
+
+**Proceso de inserción**:
+
+1. Insertar Alfa, Beta, Gamma, Delta, Epsilon, Rho sin overflow (cada uno entra en su nodo base).
+
+```
+Nodo 50: [Alfa, Delta]   (lleno)
+Nodo 51: [Beta, Rho]     (lleno)
+Nodo 52: [Gamma, Epsilon] (lleno)
+Nodo 53: [vacío]
+```
+
+2. Llega **Pi** → nodo 50 lleno → **overflow**:
+   - Calcular F3H para los registros del nodo 50: Alfa(0001), Delta(0110), Pi(0010).
+   - La clave con F3H **mayor** es Delta (0110).
+   - Sacar Delta del nodo 50 → nodo 50 queda [Alfa].
+   - La entrada 50 de la tabla queda con F3H(Delta) = 0110.
+   - Calcular nueva dirección: F1H(Delta) + F2H(Delta) = 50 + 3 = 53.
+   - Insertar Delta en nodo 53.
+   - Insertar Pi en nodo 50 (tiene lugar).
+
+```
+Nodo 50: [Alfa, Pi]      (lleno)
+Nodo 51: [Beta, Rho]     (lleno)
+Nodo 52: [Gamma, Epsilon] (lleno)
+Nodo 53: [Delta]          (1 registro)
+
+Tabla: 50→0110, 51→1111, 52→1111, 53→1111
+```
+
+3. Llega **Tau** → nodo 53: [Delta]. Tiene espacio → insertar.
+
+```
+Nodo 53: [Delta, Tau]    (lleno)
+```
+
+4. Llega **Psi** → nodo 50 lleno → overflow:
+   - F3H(Psi) = 1010. Es la clave con F3H mayor → Psi se reubica.
+   - Nueva dirección: F1H(Psi) + F2H(Psi) = 50 + 9 = 59.
+   - Nodo 59 está vacío → insertar Psi.
+
+5. Llega **Omega** → nodo 50 lleno → overflow:
+   - Pi tiene F3H = 0010. Es la mayor entre Alfa(0001), Pi(0010), Omega(0000).
+   - Nueva dirección: F1H(Pi) + F2H(Pi) = 50 + 2 = 52.
+   - Nodo 52 lleno [Gamma, Epsilon] → **overflow en cascada**.
+   - Epsilon tiene F3H = 1000 (mayor que Gamma 0101).
+   - Nueva dirección: F1H(Epsilon) + F2H(Epsilon) = 52 + 3 = 55.
+   - Nodo 55 vacío → insertar Epsilon.
+   - Ahora nodo 52 tiene lugar → insertar Pi.
+
+```
+Nodo 50: [Alfa, Omega]   (lleno)
+Nodo 52: [Gamma, Pi]     (lleno)
+Nodo 55: [Epsilon]       (1 registro)
+Nodo 59: [Psi]           (1 registro)
+```
+
+**Proceso de búsqueda** (ejemplo: buscar Delta):
+
+1. Calcular F1H(Delta) = 50 → ir a nodo 50.
+2. Calcular F3H(Delta) = 0110.
+3. Comparar con entrada 50 de la tabla (valor = 0110 de Delta) → **son iguales**.
+4. Delta está en la dirección original → buscar en nodo 50: no está.
+5. Calcular F2H(Delta) = 3 → nueva dirección 50 + 3 = 53.
+6. Comparar F3H(Delta) con entrada 53 de la tabla (1111) → 0110 < 1111 → Delta debería estar en 53.
+7. Acceder a nodo 53 → **encontrado**. **Un solo acceso a disco adicional.**
+
+**Búsqueda de un elemento inexistente** (ejemplo: buscar Rho):
+
+1. F1H(Rho) = 50, F3H(Rho) = 0100.
+2. Valor en tabla[50] = 0110. 0100 < 0110 → Rho debería estar más adelante.
+3. Nueva dirección: 50 + 5 = 55.
+4. Valor en tabla[55] = 1111. 0100 < 1111 → Rho debería estar en 55.
+5. Acceder a nodo 55 → no está → **elemento no existe**.
+
+**Costos**:
+- **Búsqueda**: siempre **1 acceso a disco** (garantizado).
+- **Inserción**: complejidad adicional si produce overflow (varios accesos según overflows sucesivos).
+- Requiere espacio extra para la tabla en memoria principal.
+
+**Proceso de eliminación**:
+1. Localizar el registro con el proceso de búsqueda.
+2. Si se encuentra, reescribir el nodo sin el elemento a borrar.
+3. **Caso especial**: si se borra una clave que produjo overflow (la que estaba en la tabla), la tabla queda con un valor de F3H que ya no corresponde a ningún registro en ese nodo. Para insertar un nuevo elemento en ese nodo, debe cumplir: `F3H(nuevo) < Tabla(direccion_del_nodo)`.
 
 ### 7. Hashing dinámico
 

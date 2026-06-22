@@ -29,6 +29,8 @@
   - [17. Corte de Control](#17-corte-de-control)
   - [18. Merge (fusión) de archivos](#18-merge-fusión-de-archivos)
   - [19. Merge con N archivos (vector de detalles)](#19-merge-con-n-archivos-vector-de-detalles)
+- [PARTE VI: Índices](#parte-vi-índices)
+  - [20. Índices: concepto y tipos](#20-índices-concepto-y-tipo)
 
 ---
 
@@ -631,6 +633,52 @@ Ordenar trae beneficios en búsquedas, pero tiene un costo alto:
 2. **Archivos medianos**: Cargar solo las claves a RAM.
 3. **Grandes (Ordenamiento Externo / Merge)**: Se parte el archivo en trozos que entran a RAM, se ordenan y luego se hace un **Merge** para unirlos.
 
+##### Sort interno y merge de K porciones
+
+Si el archivo tiene N registros y la memoria principal admite P registros, se generan `K = N/P` particiones. Cada partición se ordena en memoria y se escribe a disco. Luego se hace un merge de las K particiones.
+
+**Costo del merge**: para merge de K porciones con K buffers, se necesitan **K² desplazamientos** (lecturas + escrituras). Si se hace en un solo paso, la performance es **O(K²)**.
+
+**Ejemplo**: archivo de 800.000 registros, 1 MB de memoria, registros de 100 bytes, claves de 10 bytes.
+- Caben 10.000 registros en memoria → K = 80 particiones.
+- Merge de 80 en un solo paso: 80² = **6.400 desplazamientos**.
+- Alternativa: merge en dos pasos (10 grupos de 8 particiones):
+  - Paso 1: 10 × 8² = 640 desplazamientos.
+  - Paso 2: 10 × 80 = 800 desplazamientos.
+  - **Total: 1.440 desplazamientos** (vs. 6.400).
+
+##### Selección por reemplazo
+
+Método para incrementar el tamaño de las particiones sin más memoria principal. En lugar de escribir una partición completa antes de empezar la siguiente, se reemplaza siempre el registro con la clave menor de memoria principal por uno nuevo del disco.
+
+**Algoritmo**:
+1. Leer desde disco tantos registros como quepan en memoria principal.
+2. Iniciar una nueva partición.
+3. Seleccionar la clave menor de memoria principal → transferir a la partición en disco.
+4. Reemplazar por un registro leído desde disco. Si la clave del nuevo es menor que la del transferido, se marca como "no disponible" ("durmiente").
+5. Repetir hasta que todos los registros estén no disponibles.
+6. Iniciar nueva partición y repetir.
+
+**Ejemplo** (memoria para 3 claves, 13 claves en disco: 34, 19, 25, 59, 15, 18, 8, 22, 68, 13, 6, 48, 17):
+
+```
+Paso 1: Cargar 34, 19, 25 → menor=19 → Partición 1: [19]
+        Reemplazar 19 por 59 →内存: 34, 59(d), 25
+Paso 2: menor=25 → Partición 1: [19, 25]
+        Reemplazar 25 por 15 → 15(d), 34, 59(d)
+Paso 3: menor=34 → Partición 1: [19, 25, 34]
+        Reemplazar 34 por 18 → 15(d), 18, 59(d)
+Paso 4: menor=18 → Partición 1: [19, 25, 34, 18]
+        Reemplazar 18 por 8 → 15(d), 8, 59(d)
+Paso 5: menor=8 → Partición 1: [19, 25, 34, 18, 8]
+        Reemplazar 8 por 22 → 15(d), 22, 59(d)
+Paso 6: menor=15 → Partición 1: [19, 25, 34, 18, 8, 15]
+        Reemplazar 15 por 68 → 15(d), 22, 59(d), 68(d)
+        ...y así sucesivamente
+```
+
+**Resultado**: en promedio, el método aumenta el tamaño de las particiones al **doble** de la cantidad de registros que caben en memoria principal (**2P**).
+
 ---
 
 ## PARTE IV: Mantenimiento y Eliminación de Registros (Bajas)
@@ -646,7 +694,46 @@ Borra efectivamente la información, recuperando el espacio físico al instante.
 **Ventaja**: El archivo ocupa el espacio mínimo necesario.
 **Desventaja**: Performance (hay que copiar todo el archivo). Requiere el doble de espacio durante el proceso.
 
-**Variante — corrimientos**: en lugar de copiar a un nuevo archivo, se pueden hacer **corrimientos** dentro del mismo archivo: al eliminar un registro, se desplazan todos los siguientes una posición hacia atrás. No requiere espacio extra pero en el peor caso (eliminar el primer registro) requiere N-1 escrituras.
+**Variante — corrimientos (baja física in-situ)**: en lugar de copiar a un nuevo archivo, se pueden hacer **corrimientos** dentro del mismo archivo: al eliminar un registro, se desplazan todos los siguientes una posición hacia atrás. No requiere espacio extra pero en el peor caso (eliminar el primer registro) requiere N-1 escrituras.
+
+```pascal
+procedure BajaFisicaInSitu(var archivo: empleados);
+var
+  reg, siguiente: registro;
+  posEliminar: integer;
+begin
+  reset(archivo);
+  // Buscar el registro a eliminar
+  while not eof(archivo) do
+  begin
+    read(archivo, reg);
+    if reg.nombre = 'Carlos Garcia' then
+    begin
+      posEliminar := filepos(archivo) - 1;
+      // Correr todos los registros siguientes una posición hacia atrás
+      while not eof(archivo) do
+      begin
+        read(archivo, siguiente);
+        seek(archivo, filepos(archivo) - 2);  // retroceder 2 (el leído + el eliminado)
+        write(archivo, siguiente);
+        seek(archivo, filepos(archivo) + 1);  // avanzar para seguir leyendo
+      end;
+      // Truncar el archivo en la posición actual (quitar el último registro duplicado)
+      truncate(archivo);
+      break;
+    end;
+  end;
+  close(archivo);
+end;
+```
+
+> **Importante**: `truncate(archivo)` coloca EOF en la posición actual del puntero, eliminando todo desde ahí. Es diferente a `close()`, que solo coloca EOF después del último registro válido (dejando el último duplicado).
+
+**Análisis de performance**:
+- **n lecturas** (siempre, para encontrar y recorrer).
+- **n-1 escrituras en el peor caso** (si el elemento a borrar está en la primera posición).
+- **Ventaja**: no se necesita capacidad adicional en disco.
+- **Desventaja**: mucha actividad de E/S en el peor caso.
 
 ```pascal
 procedure BajaFisica(var archivo: empleados);
@@ -697,6 +784,19 @@ begin
   close(archivo);
 end;
 ```
+
+#### 12.3 Comparación: baja física vs baja lógica
+
+| Aspecto | Baja física | Baja lógica |
+|:--------|:------------|:------------|
+| **Espacio** | Recupera el espacio ocupado | No recupera espacio (fragmentación) |
+| **Performance** | Más lenta (muchas reescrituras o copia completa) | Más eficiente (localizar + 1 escritura) |
+| **Reversibilidad** | Irreversible | Se puede "reactivar" el registro |
+| **Uso del espacio** | Archivo queda compacto | Archivo crece con registros muertos |
+| **Complejidad** | Media (copia o corrimientos) | Baja (marcar un campo) |
+| **Cuándo usar** | Cuando se necesita recuperar espacio o el archivo es poco modificable | Cuando se hacen muchas altas/bajas y se puede compactar periódicamente |
+
+> **En la práctica**: se usa baja lógica para operación normal, y periódicamente se ejecuta un proceso de **compactación** (baja física de todos los registros marcados) para recuperar espacio.
 
 ### 13. Reutilización del espacio (Listas Invertidas)
 
@@ -766,6 +866,49 @@ Para reutilizar espacio libre con registros de longitud variable:
 - Opciones:
   - Agregar los datos adicionales al final del archivo (con un vínculo al registro original)
   - Reescribir el registro completo al final del archivo (queda espacio vacío en el origen)
+- **Solución estándar**: dividir en dos etapas: baja del registro viejo + alta del nuevo registro (siguiendo la política de recuperación de espacio).
+
+#### 14.4 Ejemplo: archivo de empleados con longitud variable
+
+Los registros de longitud variable se almacenan como **secuencia de caracteres** usando marcas de campo (`#`) y marca de fin de registro (`@`). Se utiliza un archivo sin tipo (`file`) y se leen/escriben bloques de bytes con `BlockWrite`/`BlockRead`.
+
+```pascal
+type
+  archivo_empleados = file;  // sin tipo (secuencia de bytes)
+
+procedure escribirEmpleado(var arch: archivo_empleados;
+                           apellido, nombre, direccion, documento: string);
+begin
+  // Escribir cada campo como caracteres + marcador '#'
+  BlockWrite(arch, apellido[1], length(apellido));
+  BlockWrite(arch, '#', 1);
+  BlockWrite(arch, nombre[1], length(nombre));
+  BlockWrite(arch, '#', 1);
+  BlockWrite(arch, direccion[1], length(direccion));
+  BlockWrite(arch, '#', 1);
+  BlockWrite(arch, documento[1], length(documento));
+  BlockWrite(arch, '@', 1);  // marca de fin de registro
+end;
+```
+
+Para **leer** un campo, se leen caracteres hasta encontrar `#`:
+
+```pascal
+procedure leerCampo(var arch: archivo_empleados; var campo: string);
+var
+  c: char;
+begin
+  campo := '';
+  BlockRead(arch, c, 1);
+  while (c <> '#') and (c <> '@') do
+  begin
+    campo := campo + c;
+    BlockRead(arch, c, 1);
+  end;
+end;
+```
+
+**Diferencia con longitud fija**: con longitud fija, `read`/`write` transfieren un registro completo de tamaño conocido. Con longitud variable, se lee/escribe carácter a carácter y se usan marcas para delimitar campos y registros.
 
 ---
 
@@ -1167,6 +1310,130 @@ begin
   end;
 end.
 ```
+
+---
+
+## PARTE VI: Índices
+
+### 20. Índices: concepto y tipos
+
+Un **índice** es una estructura de datos adicional que permite agilizar el acceso a la información almacenada en un archivo. Funciona como el índice alfabético de un libro: primero se busca en el índice (estructura pequeña y ordenada), y de allí se obtiene la dirección directa al dato.
+
+**Características**:
+- Es otro archivo con registros de longitud fija.
+- Su tamaño es considerablemente menor que el archivo original.
+- Posibilita imponer orden en un archivo sin que realmente se reacomode.
+- La búsqueda se realiza primero en el índice, de allí se obtiene la dirección efectiva del registro, y luego se accede directamente.
+
+#### 20.1 Índice primario
+
+Un **índice primario** relaciona la **clave primaria** del archivo de datos con la **dirección física** (NRR) de cada registro. Está ordenado por clave primaria.
+
+```
+Ejemplo: archivo de discos musicales
+Clave primaria: Compañía + Código
+
+Índice primario:
+  Clave       → Dir. Reg.
+  AME2323     → 248
+  ARI2313     → 313
+  BMG11       → 83
+  RCA1313     → 275
+  SON13       → 36
+  SON15       → 118
+  VIR1323     → 209
+  VIR2310     → 161
+  WAR23       → 15
+```
+
+**Operaciones sobre índice primario**:
+
+- **Creación**: al crearse el archivo, se crea también el índice asociado, ambos vacíos.
+- **Altas**: se agrega el registro al final del archivo de datos, y se inserta ordenadamente la nueva entrada en el índice.
+- **Modificaciones**: si el registro modificado no cambia de longitud, el índice no se altera. Si cambia de longitud (se agranda), el registro debe reubicarse y la nueva posición debe actualizarse en el índice.
+- **Bajas**: se elimina la entrada del índice. No tiene sentido recuperar espacio porque el índice debe mantenerse ordenado.
+
+**Ventaja**: al ser de menor tamaño y tener registros de longitud fija, se pueden hacer búsquedas binarias en el índice → O(log₂ N) para encontrar cualquier registro.
+
+#### 20.2 Índice para claves candidatas
+
+Las **claves candidatas** son claves que no admiten repeticiones, similares a la primaria pero que no fueron seleccionadas como tal. Su tratamiento es similar al índice primario.
+
+#### 20.3 Índices secundarios
+
+**Motivación**: no es natural buscar por clave primaria; se busca por nombre, autor, etc. (claves secundarias que pueden contener valores repetidos).
+
+Un **índice secundario** relaciona una clave secundaria con una o más claves primarias (porque varios registros pueden contener la misma clave secundaria).
+
+```
+Cadena de acceso:
+  Clave secundaria → Índice secundario → Clave primaria → Índice primario → Dir. física
+
+¿Por qué no tener la dirección física directamente?
+  Si el registro cambia de lugar, solo debe actualizarse el índice primario.
+  Los índices secundarios permanecen sin cambios.
+  Si hay 1 índice primario y 4 secundarios, ante un cambio de posición solo se modifica 1.
+```
+
+**Ejemplo**: índice de grupos musicales:
+
+```
+Clave secundaria   → Clave(s) primaria(s)
+A-ha              → SON15, VIR1323, WAR23
+Cock Robin        → SON13
+Eurythmics        → ARI2313
+Genesis           → VIR2310
+La Portuaria      → BMG11
+REM               → RCA1313
+Toto              → AME2323
+```
+
+**Operaciones sobre índice secundario**:
+
+- **Creación**: ambos archivos (índice y de datos) vacíos.
+- **Altas**: se inserta la entrada ordenadamente en el índice. Bajo costo si cabe en memoria principal.
+- **Modificaciones**: si cambia la clave secundaria → reacomodar el índice. Si cambia otro campo → ningún cambio.
+- **Bajas**: eliminar la referencia del índice primario y de todos los índices secundarios.
+
+#### 20.4 Alternativas de organización de índices secundarios
+
+**Organización 1 — Clave secundaria repetida**: almacena la misma clave secundaria en tantos registros como ocurrencias haya. Desventaja: mayor espacio, menor posibilidad de caber en memoria principal.
+
+**Organización 2 — Arreglo de claves primarias**: cada registro contiene la clave secundaria más un arreglo de claves primarias. Ejemplo: `A-ha → [SON15, VIR1323, WAR23]`. Problema: elección del tamaño del arreglo (puede resultar insuficiente o generar fragmentación).
+
+**Organización 3 — Lista invertida** (la más común): una lista de claves primarias asociada a cada clave secundaria. Usa **dos archivos**:
+
+- **Archivo de claves secundarias**: NRR, clave secundaria, puntero (a la lista).
+- **Archivo de listas invertidas**: NRR, clave primaria, enlace (al siguiente registro de la lista; -1 si es el último).
+
+```
+Archivo de claves secundarias:
+  NRR  Clave        Puntero
+  0    A-ha         → 0 (lista invertida)
+  1    Cock Robin   → 3
+  2    Eurythmics   → 4
+  ...
+
+Archivo de listas invertidas:
+  NRR  Clave Primaria  Enlace
+  0    SON15            → 1
+  1    VIR1323          → 2
+  2    WAR23            → -1
+  3    SON13            → -1
+  4    ARI2313          → -1
+  ...
+```
+
+**Ventajas de la lista invertida**:
+- El reacomodamiento se produce solo al agregar una nueva clave primaria.
+- El índice es más pequeño, el reacomodamiento es menos costoso.
+- Si se agregan o borran datos de una clave existente, solo se modifica la lista correspondiente.
+
+**Desventaja**: mantener dos archivos por cada índice secundario puede resultar costoso si hay muchos índices.
+
+#### 20.5 Índices selectivos
+
+Incluyen solo claves asociadas a una parte de la información existente (aquellos datos de mayor interés de acceso). Actúan como filtro de acceso. Solo se deben considerar modificaciones vinculadas con los datos presentes en el índice.
 
 ---
 
