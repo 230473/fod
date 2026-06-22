@@ -23,6 +23,10 @@
   - [7.4 Eliminación](#74-eliminación)
   - [7.5 Prefijos simples](#75-prefijos-simples)
 - [8. Comparativa B vs B* vs B+](#8-comparativa-b-vs-b-vs-b)
+- [9. Ejemplos prácticos paso a paso](#9-ejemplos-prácticos-paso-a-paso)
+- [10. Notación de parcial para árboles](#10-notación-de-parcial-para-árboles)
+- [11. Conteo de Lecturas y Escrituras (L/E)](#11-conteo-de-lecturas-y-escrituras-le)
+- [12. Resumen de fórmulas de costo](#12-resumen-de-fórmulas-de-costo)
 
 ---
 
@@ -773,6 +777,215 @@ Recorrido secuencial por las hojas:
 - Nodo 6: [80] — separador
 
 **Las hojas** contienen los datos reales y están **enlazadas** por el campo `sig` para recorrido secuencial rápido. Esto es lo que diferencia a B+ de B: todo el conjunto secuencia se puede recorrer en orden de clave sin retroceder en el árbol.
+
+---
+
+### 10. Notación de parcial para árboles
+
+En los parciales se usa una **notación compacta** para representar el estado del árbol sin dibujar líneas. El formato es:
+
+```
+nodo N: cant-claves tipo hijo1(clave1)hijo2(clave2)...hijoN
+```
+
+| Elemento | Significado |
+|:---------|:-----------|
+| **N** | NRR (posición del nodo en el archivo) |
+| **cant-claves** | Cantidad de claves que tiene el nodo |
+| **tipo** | `i` = nodo interno, `h` = nodo hoja |
+| **hijoK(claveK)** | Puntero a hijo NRR + separador (nodos internos) |
+| **(clave)** | Claves directas (nodos hoja) |
+| **->sig** | Puntero al siguiente hoja (solo B+, `-1` si es el último) |
+
+#### Ejemplo: Árbol B orden 4
+
+```
+nodo 7: 1 i 2(75)6
+nodo 2: 2 i 0(40)1(60)5
+nodo 6: 1 i 3(100)4
+nodo 0: 3 h(13)(23)(41)
+nodo 1: 3 h(45)(59)(62)
+nodo 5: 1 h(80)
+nodo 4: 1 h(145)
+```
+
+**Lectura**: nodo 7 es la raíz (1 clave, interno), tiene hijo 2 con separador 75, y hijo 6. Nodo 0 es hoja con 3 claves: 13, 23, 41.
+
+#### Ejemplo: Árbol B+ orden 4
+
+```
+nodo 7: 1 i 2(70)6
+nodo 2: 2 i 0(30)1(50)3
+nodo 6: 1 i 4(90)5
+nodo 0: 3 h(5)(10)(20)->1
+nodo 1: 3 h(30)(35)(40)->3
+nodo 3: 1 h(60)->4
+nodo 4: 2 h(70)->5
+nodo 5: 2 h(90)->-1
+```
+
+**Lectura**: las hojas están enlazadas: nodo 0 → nodo 1 → nodo 3 → nodo 4 → nodo 5. El `-1` indica fin de cadena.
+
+#### Ejemplo: Árbol B orden 5
+
+```
+nodo 2: 3 i 0(76)4(300)1(600):3
+nodo 0: 4 h(21)(45)(46)(70)
+nodo 4: 2 h(100)(200)
+nodo 1: 1 h(400)
+nodo 3: 2 h(700)(800)
+```
+
+**Lectura**: nodo 2 tiene 3 separadores (76, 300, 600) y 4 hijos (0, 4, 1, 3). El `:3` al final indica el último hijo.
+
+---
+
+### 11. Conteo de Lecturas y Escrituras (L/E)
+
+Cada vez que se accede a un nodo del árbol en disco, se cuenta **1 operación de E/S**:
+
+- **L (Lectura)**: se lee un nodo del disco a memoria → `read(A, nodo)` después de `seek(A, NRR)`.
+- **E (Escritura)**: se escribe un nodo modificado al disco → `write(A, nodo)` después de `seek(A, NRR)`.
+
+Se anota como `L NRR` o `E NRR`, donde NRR es el número de nodo.
+
+#### 11.1 Reglas fundamentales
+
+1. **Cada nodo visitado debe leerse** antes de poder inspeccionar su contenido. Recorrer desde la raíz hasta el nodo objetivo = h lecturas mínimo.
+2. **Cada nodo modificado debe escribirse** de vuelta al disco. Incluye nodos afectados por split, merge, redistribución o promoción de claves.
+3. **Nodos nuevos** creados durante un split cuentan como **+1 E** (escritura para crearlos).
+4. **Nueva raíz** creada cuando la raíz se divide cuenta como **+1 E** adicional.
+5. **Lectura del padre** durante inserción: en B/B* **no se contabiliza** como lectura extra porque se necesita para llegar al nodo hoja. En B+ sí se cuenta si hay que recorrer el nodo padre explícitamente.
+6. Si la clave a eliminar **está en un nodo interno** (B o B*), se debe leer adicionalmente el nodo hoja con el sucesor/menor para el intercambio: **+1 L extra**.
+
+#### 11.2 Costos por operación en Árbol B
+
+**Búsqueda**:
+
+| Caso | Costo |
+|:-----|:------|
+| Mejor (clave en raíz) | 1 L |
+| Peor (altura h) | h L |
+
+**Inserción**:
+
+| Caso | Costo | Descripción |
+|:-----|:------|:------------|
+| Mejor | h L + 1 E | Nodo hoja tiene lugar, solo se escribe |
+| Peor | h L + (2h + 1) E | Overflow se propaga hasta la raíz, que también se divide |
+
+**Explicación del peor caso**: por cada nivel se escriben 2 nodos (el dividido + el nuevo) = 2h, más 1 escritura para la nueva raíz = 2h + 1.
+
+**Eliminación**:
+
+| Caso | Costo | Descripción |
+|:-----|:------|:------------|
+| Mejor | h L + 1 E | Sin underflow, solo se modifica el nodo hoja |
+| Peor | (2h - 1) L + (h - 1) E | Concatenación que se propaga hasta la raíz |
+
+**Explicación del peor caso**: por cada nivel se lee el nodo y su hermano (2L por nivel, menos 1 porque la raíz no tiene hermano) = 2h - 1. Se escribe 1 nodo por nivel = h - 1.
+
+#### 11.3 Costos por operación en Árbol B*
+
+**Inserción** (costo por nivel):
+
+| Política | Mejor caso | Peor caso |
+|:---------|:----------|:----------|
+| Derecha | RRWW | RRWWW |
+| Izquierda o derecha | RRWW | RRRWWW |
+| Izquierda y derecha | RRWW | RRRWWWW |
+
+Donde R = lectura, W = escritura, contadas **por nivel** del árbol.
+
+**Mínimo absoluto** (sin split): **2 L + 3 E** (leer nodo saturado + hermano, escribir ambos nodos + padre).
+
+#### 11.4 Costos por operación en Árbol B+
+
+Las reglas son iguales a B, con estas diferencias:
+
+- La búsqueda **siempre llega a las hojas** (h L, nunca se detiene en nodo interno).
+- En overflow de hoja: se divide + se promueve una **copia** al padre.
+- La eliminación es más simple porque siempre se hace en hojas.
+
+#### 11.5 Ejemplo resuelto: conteo paso a paso
+
+**Árbol B orden 4, política izquierda. Estado inicial:**
+
+```
+nodo 7: 1 i 2(75)6
+nodo 2: 2 i 0(50)1(150)3(214)4
+nodo 0: 1 h(25)
+nodo 1: 2 h(126)(130)
+nodo 3: 3 h(170)(187)(199)
+nodo 4: 3 h(340)(367)(491)
+```
+
+**Operación +250:**
+
+1. `L7` — Leer raíz para navegar
+2. `L2` — Leer nodo interno (250 va entre 214 e infinito → hijo 4)
+3. `L4` — Leer nodo hoja 4
+4. `E4` — Escribir nodo 4 con 250: `(250)(340)(367)(491)` → **OVERFLOW** (máx 3)
+5. Dividir: nodo 4 ← `(250)(340)`, nuevo nodo 5 ← `(491)`, promocionar 367
+6. `E5` — Escribir nuevo nodo 5
+7. `E2` — Escribir nodo 2 con 367 promocionado → **OVERFLOW** en nodo 2
+8. Dividir: nodo 2 ← `0(50)1(150)3`, nuevo nodo 6 ← `4(367)5`, promocionar 214
+9. `E6` — Escribir nuevo nodo 6
+10. `E7` — Escribir nueva raíz (nodo 7): `2(214)6` → **altura +1**
+
+**Secuencia L/E: L7, L2, L4, E4, E5, E2, E6, E7** (3 L, 5 E)
+
+---
+
+**Operación -25:**
+
+1. `L7` — Leer raíz
+2. `L2` — Leer nodo interno
+3. `L0` — Leer nodo hoja 0: `(25)` → clave encontrada
+4. Eliminar 25 → nodo 0 vacío → **UNDERFLOW**
+5. Política izquierda: nodo 0 es extremo izquierdo, no tiene hermano izquierdo
+6. `L1` — Leer hermano derecho (nodo 1)
+7. Nodo 1 tiene `(126)(130)` → puede prestar una clave → **REDISTRIBUIR**
+8. Mover 50 del padre (nodo 2) hacia nodo 0, subir 126 del nodo 1 al padre
+9. `E0` — Escribir nodo 0: ahora `(50)`
+10. `E1` — Escribir nodo 1: ahora `(130)`
+11. `E2` — Escribir nodo 2: ahora `0(126)1(150)3(187)8`
+
+**Secuencia L/E: L7, L2, L0, L1, E0, E1, E2** (4 L, 3 E)
+
+---
+
+**Operación -150:**
+
+1. `L7` — Leer raíz
+2. `L2` — Leer nodo interno: clave 150 está en nodo interno (separador)
+3. Reemplazar 150 por su sucesor (menor del subárbol derecho)
+4. `L3` — Leer nodo hoja 3 (contiene el sucesor 170)
+5. Poner 170 en nodo 2, eliminar 170 del nodo 3
+6. `E3` — Escribir nodo 3: ahora `(174)` (sin underflow, mínimo es 1)
+7. `E2` — Escribir nodo 2: ahora `0(126)1(170)3(187)8`
+
+**Secuencia L/E: L7, L2, L3, E3, E2** (3 L, 2 E)
+
+---
+
+### 12. Resumen de fórmulas de costo
+
+| Árbol | Operación | Mejor caso | Peor caso |
+|:------|:----------|:----------|:----------|
+| **Binario** | Búsqueda | log₂(N) L | log₂(N) L |
+| **Binario** | Inserción | log₂(N) L + 2 E | — |
+| **Binario** | Eliminación | log₂(N) L + 2 E | — |
+| **B** | Búsqueda | 1 L | h L |
+| **B** | Inserción | h L + 1 E | h L + (2h+1) E |
+| **B** | Eliminación | h L + 1 E | (2h-1) L + (h-1) E |
+| **B*** | Inserción | 2 L + 3 E | 2 L + 4 E (por nivel) |
+| **B+** | Búsqueda | h L | h L |
+| **Hash** | Búsqueda/Inserción | 1 L | Variable (cadenas de overflow) |
+
+Donde **h** = altura del árbol, **N** = cantidad de registros, **M** = orden del árbol.
+
+Altura máxima: `h <= 1 + log_{[M/2]}((N+1)/2)`
 
 ---
 
