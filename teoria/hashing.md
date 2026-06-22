@@ -304,73 +304,126 @@ Estado: i=1, tabla=[cubeta1, cubeta0], cubeta1=[alfa,beta], cubeta0=[gamma]
 
 #### 7.1.1 Ejemplo paso a paso de hash extensible
 
-Claves y sus primeros bits (función de hash de 32 bits, se muestran los 8 bits menos significativos):
+Claves y sus bits de hash (función de 32 bits, se muestran los últimos bits):
 
-| Clave | Bits | Clave | Bits |
-|:------|:-----|:------|:-----|
-| Alfa | `0011 0011` | Omega | `1111 1111` |
-| Beta | `0110 0101` | Pi | `0000 0000` |
-| Gamma | `1001 1010` | Tau | `0011 1011` |
-| Epsilon | `0111 1100` | Lambda | `0100 1000` |
-| Delta | `1100 0001` | Sigma | `0010 1110` |
-| Tita | `0001 0110` | | |
+| Clave | Hash (últimos bits) | | Clave | Hash (últimos bits) |
+|:------|:--------------------|-|:------|:--------------------|
+| Alfa | `...1001` | | Pi | `...0110` |
+| Beta | `...0100` | | Tau | `...1101` |
+| Gamma | `...0010` | | Psi | `...0001` |
+| Delta | `...1111` | | Omega | `...0111` |
+| Epsilon | `...0000` | | | |
+| Rho | `...1011` | | | |
 
-Capacidad de cada cubeta: 2 registros.
+Capacidad de cada cubeta: 2 registros. Se usan los **últimos** bits del hash.
 
-**Estado inicial**: tabla con i=0 bits, una sola entrada apuntando a cubeta 0 (vacía).
-
-```
-tabla bits = 0     cubeta 0 (bits=0): [vacio]
-[0→cubeta0]
-```
-
-**Paso 1 — +Alfa, +Beta**: se toman 0 bits → ambas van a cubeta 0.
+**Estado inicial**: tabla con Vt=0 bits, una sola entrada apuntando a cubeta 0 (vacía).
 
 ```
-cubeta 0: [Alfa, Beta]
+Tabla (Vt=0):
+  [0] → cubeta 0 (Vb=0): [vacía]
 ```
 
-**Paso 2 — +Gamma**: cubeta 0 llena → **overflow**.
-1. cubeta 0: incrementar a 1 bit. Crear cubeta 1 con 1 bit.
-2. Valor cubeta (1) = valor tabla (0) → **duplicar tabla** a 2 entradas (i=1).
-3. Re-dispersar usando 1 bit: Alfa(0), Beta(0), Gamma(1).
+**Paso 1 — +Alfa**: Vt=0 → 0 bits → cubeta 0. Vacía → insertar.
 
 ```
-tabla bits = 1     cubeta 0 (bits=1): [Gamma]
-[0→cubeta1]        cubeta 1 (bits=1): [Alfa, Beta]
-[1→cubeta0]
+Tabla (Vt=0):
+  [0] → cubeta 0 (Vb=0): [Alfa]
 ```
 
-**Paso 3 — +Epsilon**: Epsilon(0) → cubeta 0. Se llena → overflow.
-1. cubeta 0: bits 1→2. Crear cubeta 2 con bits 2.
-2. Valor cubeta (2) > valor tabla (1) → **duplicar tabla** a 4 entradas (i=2).
-3. Re-dispersar cubeta 0: Gamma(10), Epsilon(00). Gamma→00(entrada 0 de tabla), Epsilon→10(entrada 2).
+**Paso 2 — +Beta**: Vt=0 → cubeta 0. Tiene espacio → insertar.
 
 ```
-tabla bits = 2     cubeta 0 (bits=2): [Gamma, Epsilon]
-[00→cubeta1]       cubeta 1 (bits=2): [Beta, Delta]
-[01→cubeta2]       cubeta 2 (bits=2): [Alfa]
-[10→cubeta0]       (entradas duplicadas: 01→cubeta2, 11→cubeta2)
-[11→cubeta2]
+Tabla (Vt=0):
+  [0] → cubeta 0 (Vb=0): [Alfa, Beta]  LLENA
 ```
 
-**Paso 4 — +Delta**(1100 0001): primer bit 1 → cubeta1. Ya hay [Beta, Alfa]. Alfa(0011)=0, Beta(0110)=1, Delta (1100)=0. Con 1 bit: Alfa→cubeta0, Beta→cubeta1, Delta→cubeta1 → overflow en cubeta1.
+**Paso 3 — +Gamma**: Vt=0 → cubeta 0. **OVERFLOW** (llena).
 
-1. cubeta1: bits 1→2. Crear cubeta2 con bits 2.
-2. Valor cubeta (2) > valor tabla (1) → **duplicar tabla**.
-   Pero en este punto ya se duplicó antes así que se maneja diferentemente...
+```
+Resolución:
+  1. Vb cubeta 0: 0 → 1
+  2. Crear cubeta 1 (Vb=1)
+  3. Vb(1) > Vt(0) → DUPLICAR tabla → Vt=1
+  4. Redispersar cubeta 0 con 1 bit:
+     Alfa  (...1001): último bit = 1 → cubeta 1
+     Beta  (...0100): último bit = 0 → cubeta 0
+  5. Insertar Gamma (...0010): último bit = 0 → cubeta 0
 
-(El ejemplo completo del hash extensible es extenso; la mecánica se repite: al llenarse una cubeta, se incrementan sus bits, se crea una nueva cubeta, y si es necesario se duplica la tabla hasta tener entradas suficientes para direccionar todas las cubetas.)
+Tabla (Vt=1):
+  [0] → cubeta 0 (Vb=1): [Beta, Gamma]
+  [1] → cubeta 1 (Vb=1): [Alfa]
+```
+
+**Paso 4 — +Delta**: Vt=1 → 1 bit: "1" → cubeta 1: [Alfa]. Tiene espacio → insertar.
+
+```
+Tabla (Vt=1):
+  [0] → cubeta 0 (Vb=1): [Beta, Gamma]  LLENA
+  [1] → cubeta 1 (Vb=1): [Alfa, Delta]  LLENA
+```
+
+**Paso 5 — +Epsilon**: Vt=1 → 1 bit: "0" → cubeta 0. **OVERFLOW**.
+
+```
+Resolución:
+  1. Vb cubeta 0: 1 → 2
+  2. Crear cubeta 2 (Vb=2)
+  3. Vb(2) > Vt(1) → DUPLICAR tabla → Vt=2
+  4. Redispersar cubeta 0 con 2 bits (últimos 2):
+     Beta  (...0100): "00" → cubeta 0
+     Gamma (...0010): "10" → cubeta 2
+  5. Insertar Epsilon (...0000): "00" → cubeta 0
+
+Tabla (Vt=2):
+  [00] → cubeta 0 (Vb=2): [Beta, Epsilon]  LLENA
+  [01] → cubeta 1 (Vb=2): [Alfa, Delta]    LLENA
+  [10] → cubeta 2 (Vb=2): [Gamma]
+  [11] → cubeta 2 (Vb=2): [Gamma]          (entradas duplicadas)
+```
+
+**Paso 6 — +Rho**: Vt=2 → 2 bits: "11" → cubeta 2: [Gamma]. Tiene espacio → insertar.
+
+```
+Tabla (Vt=2):
+  [00] → cubeta 0: [Beta, Epsilon]  LLENA
+  [01] → cubeta 1: [Alfa, Delta]    LLENA
+  [10] → cubeta 2: [Gamma, Rho]     LLENA
+  [11] → cubeta 2: [Gamma, Rho]     (misma cubeta)
+```
+
+**Paso 7 — +Pi**: Vt=2 → 2 bits: "10" → cubeta 2. **OVERFLOW**.
+
+```
+Resolución:
+  1. Vb cubeta 2: 2 → 3
+  2. Crear cubeta 3 (Vb=3)
+  3. Vb(3) > Vt(2) → DUPLICAR tabla → Vt=3
+  4. Redispersar cubeta 2 con 3 bits:
+     Gamma (...0010): "010" → cubeta 010
+     Rho   (...1011): "011" → cubeta 011
+  5. Insertar Pi (...0110): "110" → cubeta 110
+
+Tabla (Vt=3):
+  000 → cubeta [Beta, Epsilon]    (entradas duplicadas)
+  001 → cubeta [Beta, Epsilon]
+  010 → cubeta [Gamma]            (nueva)
+  011 → cubeta [Rho, Pi]          (nueva)
+  100 → cubeta [Alfa, Delta]      (entradas duplicadas)
+  101 → cubeta [Alfa, Delta]
+  110 → cubeta [Gamma]            (comparte con 010)
+  111 → cubeta [Rho, Pi]          (comparte con 011)
+```
 
 **Resumen de la mecánica**:
 
 1. Aplicar función hash → secuencia de bits.
-2. Tomar los primeros `i` bits para indexar la tabla → obtener NRR de cubeta.
+2. Tomar los últimos `Vt` bits para indexar la tabla → obtener cubeta.
 3. Si la cubeta tiene lugar → insertar.
 4. Si la cubeta está llena (overflow):
-   - Incrementar en 1 el valor de bits de la cubeta.
-   - Crear nueva cubeta con el mismo valor de bits.
-   - Si `bits_cubeta > bits_tabla` → duplicar tabla (2× entradas) e incrementar i.
+   - Incrementar en 1 el valor de bits de la cubeta (Vb).
+   - Crear nueva cubeta con el mismo Vb.
+   - Si `Vb > Vt` → duplicar tabla (2× entradas) e incrementar Vt.
    - Re-dispersar las claves de la cubeta original entre la vieja y la nueva, usando 1 bit más.
 
 **Ventaja clave del hash extensible**: solo se redispersan las claves de la(s) cubeta(s) afectadas por el overflow, no todo el archivo. Esto lo hace eficiente para archivos que crecen gradualmente.
